@@ -49,7 +49,7 @@ const DEVNET_MODE = process.env.DEVNET_MODE === "true";
 const PROGRAMIDS = DEVNET_MODE ? DEVNET_PROGRAM_ID : MAINNET_PROGRAM_ID;
 const addLookupTableInfo = DEVNET_MODE ? undefined : LOOKUP_TABLE_CACHE;
 const TIMER = process.env.TIME_PERIOD;
-const PROGRAM_ADDRESS = process.env.PROGRAM_ADDRESS;
+const TOKEN_ADDRESS = process.env.TOKEN_ADDRESS;
 
 const makeTxVersion = TxVersion.V0; // LEGACY
 const connection = new Connection(DEVNET_MODE ? clusterApiUrl("devnet") : process.env.MAINNET_RPC_URL, "confirmed");
@@ -82,6 +82,7 @@ const getWalletTokenAccount = async (connection, wallet) => {
 };
 
 const sendAndConfirmTransactions = async (connection, payer, transactions) => {
+    console.log("payer:", payer);
     for (const tx of transactions) {
         let signature;
         if (tx instanceof VersionedTransaction) {
@@ -90,7 +91,7 @@ const sendAndConfirmTransactions = async (connection, payer, transactions) => {
         }
         else
             signature = await connection.sendTransaction(tx, [payer]);
-        await connection.confirmTransaction({ signature });
+        await connection.confirmTransaction(signature);
     }
 };
 
@@ -149,7 +150,9 @@ const createPool = async (mintAddress, tokenAmount, solAmount) => {
         associatedOnly: false,
         checkCreateATAOwner: true,
         makeTxVersion: makeTxVersion,
-        feeDestinationId: DEVNET_MODE ? new PublicKey("3XMrhbv989VxAMi3DErLV9eJht1pHppW5LbKxe9fkEFR") : new PublicKey("7YttLkHDoNj9wyDur5pM1ejNaAvT9X4eqaYcHQqtj2G5"), // only mainnet use this
+        feeDestinationId:
+            DEVNET_MODE ? new PublicKey("3XMrhbv989VxAMi3DErLV9eJht1pHppW5LbKxe9fkEFR")
+                : new PublicKey("7YttLkHDoNj9wyDur5pM1ejNaAvT9X4eqaYcHQqtj2G5"), // only mainnet use this
     });
 
     const transactions = await buildSimpleTransaction({
@@ -169,20 +172,18 @@ const buyToken = async (mintAddress, tokenAmount) => {
 
     const mint = new PublicKey(mintAddress);
     const mintInfo = await getMint(connection, mint);
-    const baseToken = new Token(TOKEN_PROGRAM_ID, mintAddress, mintInfo.decimals, 'Test Token', 'TTOKEN');
+    const baseToken = new Token(TOKEN_PROGRAM_ID, mintAddress, mintInfo.decimals, 'MyTestToken', 'MTT');
     const quoteToken = new Token(TOKEN_PROGRAM_ID, "So11111111111111111111111111111111111111112", 9, "WSOL", "WSOL");
     const walletTokenAccounts = await getWalletTokenAccount(connection, buyerOrSeller.publicKey);
 
     const slippage = new Percent(1, 100);
-    // const inputTokenAmount = new TokenAmount(baseToken, solAmount, false);
     const outputTokenAmount = new TokenAmount(baseToken, tokenAmount, false);
-    // const outputToken = quoteToken;
 
     const [{ publicKey: marketId, accountInfo }] = await Market.findAccountsByMints(connection, baseToken.mint, quoteToken.mint, PROGRAMIDS.OPENBOOK_MARKET);
     const marketInfo = MARKET_STATE_LAYOUT_V3.decode(accountInfo.data);
     let poolKeys = Liquidity.getAssociatedPoolKeys({
         version: 4,
-        marketVersion: 4,
+        marketVersion: 3,
         baseMint: baseToken.mint,
         quoteMint: quoteToken.mint,
         baseDecimals: baseToken.decimals,
@@ -191,6 +192,7 @@ const buyToken = async (mintAddress, tokenAmount) => {
         programId: PROGRAMIDS.AmmV4,
         marketProgramId: PROGRAMIDS.OPENBOOK_MARKET,
     });
+    // console.log("Pool Keys:", poolKeys);
     poolKeys.marketBaseVault = marketInfo.baseVault;
     poolKeys.marketQuoteVault = marketInfo.quoteVault;
     poolKeys.marketBids = marketInfo.bids;
@@ -198,7 +200,7 @@ const buyToken = async (mintAddress, tokenAmount) => {
     poolKeys.marketEventQueue = marketInfo.eventQueue;
     // console.log("Pool Keys:", poolKeys);
 
-    // -------- step 1: compute amount out --------
+    // -------- step 1: compute amount in --------
     const { amountIn, maxAmountIn } = Liquidity.computeAmountIn({
         poolKeys: poolKeys,
         poolInfo: await Liquidity.fetchInfo({ connection, poolKeys }),
@@ -206,8 +208,7 @@ const buyToken = async (mintAddress, tokenAmount) => {
         currencyIn: quoteToken,
         slippage: slippage,
     });
-
-    // console.log('amountIn:', amountIn.toFixed(), '  minAmountIn: ', minAmountIn.toFixed())
+    console.log('amountIn:', amountIn.toFixed(), '  maxAmountIn:', maxAmountIn.toFixed())
 
     // -------- step 2: create instructions by SDK function --------
     const { innerTransactions } = await Liquidity.makeSwapInstructionSimple({
@@ -223,8 +224,6 @@ const buyToken = async (mintAddress, tokenAmount) => {
         makeTxVersion,
     });
 
-    // console.log('amountOut:', amountOut.toFixed(), '  minAmountOut: ', minAmountOut.toFixed())
-
     const transactions = await buildSimpleTransaction({
         connection: connection,
         makeTxVersion: makeTxVersion,
@@ -232,6 +231,7 @@ const buyToken = async (mintAddress, tokenAmount) => {
         innerTransactions: innerTransactions,
         addLookupTableInfo: addLookupTableInfo,
     });
+    // console.log("transactions:", transactions);
 
     await sendAndConfirmTransactions(connection, buyerOrSeller, transactions);
     console.log("Success!!!");
@@ -242,7 +242,7 @@ const sellToken = async (mintAddress, tokenAmount) => {
 
     const mint = new PublicKey(mintAddress);
     const mintInfo = await getMint(connection, mint);
-    const baseToken = new Token(TOKEN_PROGRAM_ID, mintAddress, mintInfo.decimals, 'Test Token', 'TTOKEN');
+    const baseToken = new Token(TOKEN_PROGRAM_ID, mintAddress, mintInfo.decimals, 'MyTestToken', 'MTTK');
     const quoteToken = new Token(TOKEN_PROGRAM_ID, "So11111111111111111111111111111111111111112", 9, "WSOL", "WSOL");
     const walletTokenAccounts = await getWalletTokenAccount(connection, buyerOrSeller.publicKey);
 
@@ -253,7 +253,7 @@ const sellToken = async (mintAddress, tokenAmount) => {
     const marketInfo = MARKET_STATE_LAYOUT_V3.decode(accountInfo.data);
     let poolKeys = Liquidity.getAssociatedPoolKeys({
         version: 4,
-        marketVersion: 4,
+        marketVersion: 3,
         baseMint: baseToken.mint,
         quoteMint: quoteToken.mint,
         baseDecimals: baseToken.decimals,
@@ -262,6 +262,7 @@ const sellToken = async (mintAddress, tokenAmount) => {
         programId: PROGRAMIDS.AmmV4,
         marketProgramId: PROGRAMIDS.OPENBOOK_MARKET,
     });
+    console.log("poolKeys:", poolKeys);
     poolKeys.marketBaseVault = marketInfo.baseVault;
     poolKeys.marketQuoteVault = marketInfo.quoteVault;
     poolKeys.marketBids = marketInfo.bids;
@@ -277,8 +278,7 @@ const sellToken = async (mintAddress, tokenAmount) => {
         currencyOut: quoteToken,
         slippage: slippage,
     });
-
-    // console.log('amountIn:', amountIn.toFixed(), '  minAmountIn: ', minAmountIn.toFixed())
+    // console.log('amountOut:', amountOut.toFixed(), '  minAmountOut: ', minAmountOut.toFixed())
 
     // -------- step 2: create instructions by SDK function --------
     const { innerTransactions } = await Liquidity.makeSwapInstructionSimple({
@@ -293,8 +293,6 @@ const sellToken = async (mintAddress, tokenAmount) => {
         fixedSide: 'in',
         makeTxVersion,
     });
-
-    // console.log('amountOut:', amountOut.toFixed(), '  minAmountOut: ', minAmountOut.toFixed())
 
     const transactions = await buildSimpleTransaction({
         connection: connection,
@@ -413,23 +411,24 @@ const createToken = async (name, symbol, decimals, totalSupply) => {
     console.log("============================================");
 }
 
-// createToken("Test Token", "TToken", 6, 1000000000);
-// createPool("BsXjXxzPvbCk3Xr5ke6ReLVUAqwSyYqa9RVVuAtfDwJZ", 1000000000, 1);
 
-// mintToken("CCxdU4oAcF7upb6QYtgYXnEAiSRdBwW3gxSoCgjv2ocX", 1000000);
-// createOpenBookMarket("CCxdU4oAcF7upb6QYtgYXnEAiSRdBwW3gxSoCgjv2ocX", 1, 0.000001);
-// disableFreezeAuthority("Ekxye9ckVZXT1vymJNkgS3cVzWyf6e26hY8TNSjTyBi8");
+// createToken("MyTestToken", "MTT", 6, 1000000000);
+//  mintToken("7VpmJYZG3y5tFzX6yY5HzmC82MzgVoGZAnCgsmjVPpE9", 1000000);
+//  createOpenBookMarket("CCxdU4oAcF7upb6QYtgYXnEAiSRdBwW3gxSoCgjv2ocX", 1, 0.000001);
+//  disableFreezeAuthority("Ekxye9ckVZXT1vymJNkgS3cVzWyf6e26hY8TNSjTyBi8");
 
-// buyToken("BsXjXxzPvbCk3Xr5ke6ReLVUAqwSyYqa9RVVuAtfDwJZ", 100);
-// sellToken("BsXjXxzPvbCk3Xr5ke6ReLVUAqwSyYqa9RVVuAtfDwJZ", 10);
+// createPool(TOKEN_ADDRESS, 800000000, 1);
 
-let timer = setInterval(() => {
-    if (args.length > 3) {
-        if (args[2] === "sell")
-            sellToken(PROGRAM_ADDRESS, args[3]);
-        else if (args[2] === "buy")
-            buyToken(PROGRAM_ADDRESS, args[3])
-    } else {
-        console.log('Please set the token amount!');
-    }
-}, TIMER);
+// sellToken(TOKEN_ADDRESS, 1000);
+buyToken(TOKEN_ADDRESS, 1000);
+
+// let timer = setInterval(() => {
+//     if (args.length > 3) {
+//         if (args[2] === "sell")
+//             sellToken(TOKEN_ADDRESS, args[3]);
+//         else if (args[2] === "buy")
+//             buyToken(TOKEN_ADDRESS, args[3])
+//     } else {
+//         console.log('Please set the token amount!');
+//     }
+// }, TIMER);
